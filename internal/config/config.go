@@ -77,7 +77,13 @@ func Load(dotenvSource string) (*Config, error) {
 	}
 	cfg.QueryTimeout = time.Duration(max(querySeconds, 1)) * time.Second
 
-	if cfg.Port, err = intOr("SERVER_PORT", 8088); err != nil {
+	// SERVER_PORT first, then PORT: most hosting platforms (Fly, Render,
+	// Railway, Vercel) inject PORT and expect the server to listen on it.
+	defaultPort := 8088
+	if platformPort, err := intOr("PORT", 0); err == nil && platformPort > 0 {
+		defaultPort = platformPort
+	}
+	if cfg.Port, err = intOr("SERVER_PORT", defaultPort); err != nil {
 		return nil, err
 	}
 	if cfg.Port < 1 || cfg.Port > 65535 {

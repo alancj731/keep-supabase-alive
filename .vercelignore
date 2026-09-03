@@ -2,6 +2,10 @@
 .env
 .env.*
 
+# The standalone server: a root main package would make Vercel build that
+# instead of the api/ function.
+cmd/
+
 .git
 Dockerfile
 docker-compose.yml

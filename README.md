@@ -28,7 +28,7 @@ run, and starts the service:
 Or plainly:
 
 ```bash
-go build -o supabase-keepalive .
+go build -o supabase-keepalive ./cmd/supabase-keepalive
 ./supabase-keepalive
 ```
 
@@ -48,6 +48,10 @@ invocation, and **Vercel Cron** calls it on the schedule in `vercel.json`.
 vercel deploy --prod          # or connect the GitHub repo in the dashboard
 ```
 
+The standalone server lives in `cmd/supabase-keepalive`, deliberately **not** at the repository
+root: a root `main` package makes Vercel's Go builder compile that as a standalone server instead
+of building the `api/` function.
+
 Set these in Project → Settings → Environment Variables (there is no `.env` on Vercel):
 
 | Variable | Value |
@@ -57,6 +61,7 @@ Set these in Project → Settings → Environment Variables (there is no `.env` 
 | `CRON_SECRET` | a random string — Vercel sends it as `Authorization: Bearer …`, and the function rejects anything else |
 | `KEEPALIVE_RETRY_ATTEMPTS` | `2` — keeps a run inside the function time limit |
 | `KEEPALIVE_RETRY_BACKOFF_MS` | `500` |
+| `GOFLAGS` | `-buildvcs=false` — Go cannot stamp VCS metadata in Vercel's build sandbox, which fails the build without this |
 
 Things that differ from running the binary:
 
@@ -91,7 +96,7 @@ Every setting is an environment variable; see `.env.example` for the annotated v
 | `KEEPALIVE_QUERY_TIMEOUT_SECONDS` | `10` | Query timeout |
 | `KEEPALIVE_API_TOKEN` | *(empty)* | When set, `/api/**` requires `Authorization: Bearer <token>` |
 | `KEEPALIVE_LOG_LEVEL` | `INFO` | `DEBUG` also logs each connection attempt and the SQL being run |
-| `SERVER_PORT` | `8088` | HTTP port |
+| `SERVER_PORT` | `PORT`, else `8088` | HTTP port. Platforms that inject `PORT` (Fly, Render, Railway) work without configuration |
 | `MANAGEMENT_HEALTH_SHOW_DETAILS` | `always` | Set to `never` to hide per-project detail from the health endpoint |
 
 ### Getting a connection string
@@ -200,7 +205,7 @@ The logged DSN never contains the password — credentials are passed as connect
 go test ./...
 ```
 
-62 cases covering the Vercel entry point (auth, and that a bad connection string is reported
+66 cases covering the Vercel entry point (auth, and that a bad connection string is reported
 without being echoed), connection-string parsing (percent-encoded passwords, credentials kept out of the
 DSN), table identifier validation and SQL-injection rejection, `.env` parsing and precedence,
 config defaults and bad values, project/table pairing, the retry and redaction behaviour against a

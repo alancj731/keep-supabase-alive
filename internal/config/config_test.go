@@ -89,6 +89,41 @@ func TestLoadRejectsBadValues(t *testing.T) {
 	}
 }
 
+func TestPortPrecedence(t *testing.T) {
+	t.Run("PORT is used when SERVER_PORT is absent", func(t *testing.T) {
+		t.Setenv("PORT", "3000")
+		cfg, err := Load("none")
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.Port != 3000 {
+			t.Errorf("Port = %d, want the platform-injected 3000", cfg.Port)
+		}
+	})
+
+	t.Run("SERVER_PORT wins over PORT", func(t *testing.T) {
+		t.Setenv("PORT", "3000")
+		t.Setenv("SERVER_PORT", "9999")
+		cfg, err := Load("none")
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.Port != 9999 {
+			t.Errorf("Port = %d, want 9999", cfg.Port)
+		}
+	})
+
+	t.Run("falls back to 8088", func(t *testing.T) {
+		cfg, err := Load("none")
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.Port != 8088 {
+			t.Errorf("Port = %d, want 8088", cfg.Port)
+		}
+	})
+}
+
 func TestShowDetailsCanBeDisabled(t *testing.T) {
 	t.Setenv("MANAGEMENT_HEALTH_SHOW_DETAILS", "never")
 	cfg, err := Load("none")
