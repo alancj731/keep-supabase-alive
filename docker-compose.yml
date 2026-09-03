@@ -1,0 +1,19 @@
+services:
+  keepalive:
+    build: .
+    image: supabase-keepalive:1.0.0
+    container_name: supabase-keepalive
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SERVER_PORT: 8088
+    ports:
+      - "${SERVER_PORT:-8088}:8088"
+    healthcheck:
+      # Liveness only: a paused/unreachable Supabase project must not restart this container.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8088/actuator/health/liveness"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s

@@ -1,0 +1,12 @@
+# Secrets
+.env
+
+# Build output
+target/
+!.mvn/wrapper/maven-wrapper.properties
+
+# Editors / OS
+.idea/
+*.iml
+.vscode/
+.DS_Store
