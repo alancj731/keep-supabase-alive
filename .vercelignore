@@ -1,3 +1,8 @@
+# Never upload local secrets: the function reads ./.env if one is present.
+.env
+.env.*
+
+.git
 Dockerfile
 docker-compose.yml
 .dockerignore
