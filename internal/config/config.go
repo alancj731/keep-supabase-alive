@@ -79,14 +79,14 @@ func Load(dotenvSource string) (*Config, error) {
 	}
 	cfg.QueryTimeout = time.Duration(max(querySeconds, 1)) * time.Second
 
-	// SERVER_PORT first, then PORT: most hosting platforms (Fly, Render,
-	// Railway, Vercel) inject PORT and expect the server to listen on it.
-	defaultPort := 8088
-	if platformPort, err := intOr("PORT", 0); err == nil && platformPort > 0 {
-		defaultPort = platformPort
-	}
-	if cfg.Port, err = intOr("SERVER_PORT", defaultPort); err != nil {
+	// PORT wins when the platform injects it: Vercel, Fly, Render and Railway
+	// pick the port and route to it, so honouring a stale SERVER_PORT would
+	// leave the service unreachable. SERVER_PORT is the local convenience.
+	if cfg.Port, err = intOr("SERVER_PORT", 8088); err != nil {
 		return nil, err
+	}
+	if platformPort, portErr := intOr("PORT", 0); portErr == nil && platformPort > 0 {
+		cfg.Port = platformPort
 	}
 	if cfg.Port < 1 || cfg.Port > 65535 {
 		return nil, fmt.Errorf("SERVER_PORT %d is not a valid port", cfg.Port)

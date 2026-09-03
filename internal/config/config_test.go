@@ -101,15 +101,17 @@ func TestPortPrecedence(t *testing.T) {
 		}
 	})
 
-	t.Run("SERVER_PORT wins over PORT", func(t *testing.T) {
+	// The platform picks the port and routes to it, so PORT must win over a
+	// stale SERVER_PORT or the service is unreachable.
+	t.Run("PORT wins over SERVER_PORT", func(t *testing.T) {
 		t.Setenv("PORT", "3000")
 		t.Setenv("SERVER_PORT", "9999")
 		cfg, err := Load("none")
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
-		if cfg.Port != 9999 {
-			t.Errorf("Port = %d, want 9999", cfg.Port)
+		if cfg.Port != 3000 {
+			t.Errorf("Port = %d, want the platform-injected 3000", cfg.Port)
 		}
 	})
 

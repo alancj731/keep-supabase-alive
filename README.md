@@ -74,6 +74,10 @@ Set these in Project → Settings → Environment Variables (there is no `.env` 
 | `KEEPALIVE_RETRY_ATTEMPTS` | `2` — keeps a run inside the function time limit |
 | `KEEPALIVE_RETRY_BACKOFF_MS` | `500` |
 
+Do **not** set `SERVER_PORT` on a hosting platform. The platform injects `PORT`, picks the value
+itself and routes to it, so `PORT` takes precedence — a stale `SERVER_PORT` would only be honoured
+locally.
+
 Verify the deployment by triggering it the same way the scheduler does:
 
 ```bash
@@ -86,7 +90,9 @@ Other notes:
 - **Hobby plans currently limit cron to about one run per day** at an approximate time. That is
   ample — Supabase's window is around seven days.
 - **Use the transaction pooler (port 6543)** rather than session mode: hosted runtimes open and
-  drop connections constantly.
+  drop connections constantly. The client uses PostgreSQL's simple protocol so this works — a
+  pooler in transaction mode shares one server connection between clients, and cached prepared
+  statements collide there with `prepared statement ... already exists (SQLSTATE 42P05)`.
 - Status history resets whenever the instance is recycled; it is in memory, as everywhere else.
 
 ## Configuration
