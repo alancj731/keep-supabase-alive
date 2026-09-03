@@ -56,6 +56,12 @@ vercel deploy --prod          # or connect the GitHub repo in the dashboard
 
 Import settings: Root Directory `./`, and leave Build/Output/Install commands empty.
 
+`vercel.json` sets `GOFLAGS=-buildvcs=false` for the build. Go stamps VCS metadata into the
+binary and aborts with `error obtaining VCS status: exit status 128` if it finds a `.git`
+directory it cannot read, which is easy to end up with in a build sandbox. For the same reason
+`.vercelignore` must not exclude `.git`: removing part of it leaves exactly the broken repository
+that triggers the error.
+
 Set these in Project → Settings → Environment Variables (there is no `.env` on Vercel):
 
 | Variable | Value |
@@ -67,7 +73,6 @@ Set these in Project → Settings → Environment Variables (there is no `.env` 
 | `KEEPALIVE_RUN_ON_STARTUP` | `false` — avoid a ping on every cold start |
 | `KEEPALIVE_RETRY_ATTEMPTS` | `2` — keeps a run inside the function time limit |
 | `KEEPALIVE_RETRY_BACKOFF_MS` | `500` |
-| `GOFLAGS` | `-buildvcs=false` — Go cannot stamp VCS metadata in Vercel's build sandbox, which fails the build without it |
 
 Verify the deployment by triggering it the same way the scheduler does:
 

@@ -2,7 +2,6 @@
 .env
 .env.*
 
-.git
 Dockerfile
 docker-compose.yml
 .dockerignore
