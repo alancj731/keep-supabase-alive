@@ -41,4 +41,4 @@ info "config: $(pwd)/.env (${projects:-0} project(s))"
 
 # --- run ------------------------------------------------------------------
 info "starting (Ctrl-C to stop)"
-exec go run ./cmd/supabase-keepalive "$@"
+exec go run ./cmd/server "$@"

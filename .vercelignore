@@ -1,10 +1,6 @@
-# Never upload local secrets: the function reads ./.env if one is present.
+# Never upload local secrets: the server reads ./.env if one is present.
 .env
 .env.*
-
-# The standalone server: a root main package would make Vercel build that
-# instead of the api/ function.
-cmd/
 
 .git
 Dockerfile

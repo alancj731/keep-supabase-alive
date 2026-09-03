@@ -27,6 +27,7 @@ type Config struct {
 	QueryTimeout   time.Duration // KEEPALIVE_QUERY_TIMEOUT_SECONDS
 
 	APIToken    string // KEEPALIVE_API_TOKEN, when set /api/** needs a bearer token
+	CronSecret  string // CRON_SECRET, the bearer token Vercel Cron sends
 	Port        int    // SERVER_PORT
 	LogLevel    slog.Level
 	ShowDetails bool // MANAGEMENT_HEALTH_SHOW_DETAILS
@@ -43,6 +44,7 @@ func Load(dotenvSource string) (*Config, error) {
 		Cron:         stringOr("KEEPALIVE_CRON", "0 0 3 * * *"),
 		TimezoneName: stringOr("KEEPALIVE_TIMEZONE", "UTC"),
 		APIToken:     strings.TrimSpace(os.Getenv("KEEPALIVE_API_TOKEN")),
+		CronSecret:   strings.TrimSpace(os.Getenv("CRON_SECRET")),
 		DotenvSource: dotenvSource,
 	}
 

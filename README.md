@@ -40,17 +40,21 @@ Requires Go 1.23+ to build.
 
 ### Deploying to Vercel
 
-Vercel runs functions, not long-running processes, so the in-process schedule cannot be used
-there. `api/keepalive.go` is a serverless entry point that pings every project once per
-invocation, and **Vercel Cron** calls it on the schedule in `vercel.json`.
+Vercel's Go runtime builds a **standalone server**, not per-file functions: it looks for an
+entrypoint at `main.go`, `cmd/api/main.go` or `cmd/server/main.go`. This project puts it at
+`cmd/server/main.go`, so the whole service deploys — `/api/keepalive/status`, `/actuator/health`
+and all — and `SERVER_PORT` falls back to the `PORT` Vercel injects.
+
+What differs is the schedule: a hosted process is not guaranteed to stay alive between requests,
+so the in-process cron is disabled there and **Vercel Cron** calls `/api/keepalive/run` instead,
+on the schedule in `vercel.json`. That endpoint accepts `GET` as well as `POST` because hosted
+schedulers trigger with `GET`.
 
 ```bash
 vercel deploy --prod          # or connect the GitHub repo in the dashboard
 ```
 
-The standalone server lives in `cmd/supabase-keepalive`, deliberately **not** at the repository
-root: a root `main` package makes Vercel's Go builder compile that as a standalone server instead
-of building the `api/` function.
+Import settings: Root Directory `./`, and leave Build/Output/Install commands empty.
 
 Set these in Project → Settings → Environment Variables (there is no `.env` on Vercel):
 
@@ -58,26 +62,27 @@ Set these in Project → Settings → Environment Variables (there is no `.env` 
 |---|---|
 | `SUPABASE_URLS` | your comma-separated list, unchanged |
 | `SUPABASE_TABLES` | unchanged |
-| `CRON_SECRET` | a random string — Vercel sends it as `Authorization: Bearer …`, and the function rejects anything else |
+| `CRON_SECRET` | a random string — Vercel sends it as `Authorization: Bearer …`; `/api/**` rejects anything else |
+| `KEEPALIVE_CRON` | `-` — disable the in-process schedule; Vercel Cron drives it |
+| `KEEPALIVE_RUN_ON_STARTUP` | `false` — avoid a ping on every cold start |
 | `KEEPALIVE_RETRY_ATTEMPTS` | `2` — keeps a run inside the function time limit |
 | `KEEPALIVE_RETRY_BACKOFF_MS` | `500` |
-| `GOFLAGS` | `-buildvcs=false` — Go cannot stamp VCS metadata in Vercel's build sandbox, which fails the build without this |
+| `GOFLAGS` | `-buildvcs=false` — Go cannot stamp VCS metadata in Vercel's build sandbox, which fails the build without it |
 
-Things that differ from running the binary:
+Verify the deployment by triggering it the same way the scheduler does:
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/keepalive/run
+```
+
+Other notes:
 
 - **The schedule lives in `vercel.json`**, in standard 5-field cron (`0 3 * * *`).
-  `KEEPALIVE_CRON` is ignored on Vercel.
-- **There is no status history.** Every invocation is cold, so `/api/keepalive/status` cannot
-  exist; the function returns the result of the run it just performed, and failures show up as
-  a `503` in the Vercel dashboard.
 - **Hobby plans currently limit cron to about one run per day** at an approximate time. That is
   ample — Supabase's window is around seven days.
-- **Use the transaction pooler (port 6543)** rather than session mode: serverless functions open
-  and drop connections constantly.
-- If a run needs longer than the default function timeout, raise it with a `functions` entry in
-  `vercel.json` (`maxDuration`), or lower the retry settings above.
-
-`main.go`, `./startdev` and the container image are unaffected — the same code deploys either way.
+- **Use the transaction pooler (port 6543)** rather than session mode: hosted runtimes open and
+  drop connections constantly.
+- Status history resets whenever the instance is recycled; it is in memory, as everywhere else.
 
 ## Configuration
 
@@ -205,9 +210,9 @@ The logged DSN never contains the password — credentials are passed as connect
 go test ./...
 ```
 
-66 cases covering the Vercel entry point (auth, and that a bad connection string is reported
-without being echoed), connection-string parsing (percent-encoded passwords, credentials kept out of the
-DSN), table identifier validation and SQL-injection rejection, `.env` parsing and precedence,
-config defaults and bad values, project/table pairing, the retry and redaction behaviour against a
-stub connector, the concurrent-run guard, and every HTTP endpoint including the token filter and
-health status codes. No database or network is needed.
+67 cases covering connection-string parsing (percent-encoded passwords, credentials kept out of
+the DSN), table identifier validation and SQL-injection rejection, `.env` parsing and precedence,
+config defaults, bad values and `PORT`/`SERVER_PORT` precedence, project/table pairing, the retry
+and redaction behaviour against a stub connector, the concurrent-run guard, and every HTTP endpoint
+including both accepted bearer tokens, the `GET`/`POST` trigger and the health status codes. No
+database or network is needed.

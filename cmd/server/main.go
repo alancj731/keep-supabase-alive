@@ -78,7 +78,7 @@ func run() error {
 
 	server := &httpapi.Server{
 		Service: service, Cron: cfg.Cron, Timezone: cfg.TimezoneName, NextRun: nextRun,
-		APIToken: cfg.APIToken, ShowDetails: cfg.ShowDetails, Logger: logger,
+		APIToken: cfg.APIToken, CronSecret: cfg.CronSecret, ShowDetails: cfg.ShowDetails, Logger: logger,
 	}
 	httpServer := &http.Server{
 		Addr:              net.JoinHostPort("", strconv.Itoa(cfg.Port)),

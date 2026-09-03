@@ -196,6 +196,43 @@ func TestTokenIsRequiredWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestCronSecretIsAcceptedAlongsideTheApiToken(t *testing.T) {
+	server := newServer(t, stubConnector{}, "manual-token")
+	server.CronSecret = "vercel-cron-secret"
+
+	for name, token := range map[string]string{
+		"api token":   "manual-token",
+		"cron secret": "vercel-cron-secret",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if recorder, body := do(t, server, http.MethodGet, "/api/keepalive/status", token); recorder.Code != http.StatusOK {
+				t.Errorf("status = %d, want 200 (%v)", recorder.Code, body)
+			}
+		})
+	}
+	if recorder, _ := do(t, server, http.MethodGet, "/api/keepalive/status", "neither"); recorder.Code != http.StatusUnauthorized {
+		t.Errorf("unknown token: status = %d, want 401", recorder.Code)
+	}
+}
+
+// Hosted schedulers trigger with GET, so /run must accept both verbs.
+func TestRunAcceptsGetAsWellAsPost(t *testing.T) {
+	server := newServer(t, stubConnector{}, "")
+
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		t.Run(method, func(t *testing.T) {
+			recorder, body := do(t, server, method, "/api/keepalive/run", "")
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", recorder.Code)
+			}
+			run := body["run"].(map[string]any)
+			if run["succeeded"].(float64) != 2 {
+				t.Errorf("run = %v", run)
+			}
+		})
+	}
+}
+
 func TestHealthEndpointsStayOpenWhenTokenIsSet(t *testing.T) {
 	server := newServer(t, stubConnector{}, "s3cret-token")
 

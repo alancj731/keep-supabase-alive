@@ -9,7 +9,7 @@ RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
 # Static binary so the runtime image needs no libc.
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/supabase-keepalive ./cmd/supabase-keepalive
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/supabase-keepalive ./cmd/server
 
 # ---- run ------------------------------------------------------------------
 FROM alpine:3.22

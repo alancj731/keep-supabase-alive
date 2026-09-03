@@ -22,11 +22,13 @@ type NextRunFunc func() *time.Time
 
 // Server holds everything the handlers need.
 type Server struct {
-	Service     *keepalive.Service
-	Cron        string
-	Timezone    string
-	NextRun     NextRunFunc
-	APIToken    string
+	Service  *keepalive.Service
+	Cron     string
+	Timezone string
+	NextRun  NextRunFunc
+	APIToken string
+	// CronSecret is the token Vercel Cron sends; accepted alongside APIToken.
+	CronSecret  string
 	ShowDetails bool
 	Logger      *slog.Logger
 }
@@ -67,6 +69,8 @@ func (s *Server) Handler() http.Handler {
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/keepalive/status", s.handleStatus)
 	api.HandleFunc("POST /api/keepalive/run", s.handleRun)
+	// GET too: hosted schedulers (Vercel Cron among them) trigger with GET.
+	api.HandleFunc("GET /api/keepalive/run", s.handleRun)
 
 	mux := http.NewServeMux()
 	mux.Handle("/api/", s.requireToken(api))
@@ -159,7 +163,13 @@ func (s *Server) handleLiveness(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) requireToken(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.APIToken == "" {
+		accepted := make([]string, 0, 2)
+		for _, token := range []string{s.APIToken, s.CronSecret} {
+			if token != "" {
+				accepted = append(accepted, token)
+			}
+		}
+		if len(accepted) == 0 {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -169,11 +179,13 @@ func (s *Server) requireToken(next http.Handler) http.Handler {
 		if len(header) >= len(prefix) && strings.EqualFold(header[:len(prefix)], prefix) {
 			provided = strings.TrimSpace(header[len(prefix):])
 		}
-		if subtle.ConstantTimeCompare([]byte(provided), []byte(s.APIToken)) != 1 {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-			return
+		for _, token := range accepted {
+			if subtle.ConstantTimeCompare([]byte(provided), []byte(token)) == 1 {
+				next.ServeHTTP(w, r)
+				return
+			}
 		}
-		next.ServeHTTP(w, r)
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 	})
 }
 
