@@ -7,6 +7,8 @@ point is the activity.
 
 Projects are configured entirely in `.env`, comma-separated, so adding one is a one-line change.
 
+Go, no framework: a ~32 MB container image and a single static binary.
+
 ## Quick start
 
 ```bash
@@ -15,27 +17,26 @@ docker compose up -d --build
 curl localhost:8088/api/keepalive/status | jq
 ```
 
-For development, `./startdev` picks a JDK 21+ (this machine's default `java` is a JRE),
-bootstraps `.env` from `.env.example` on first run, and starts the app:
+For development, `./startdev` checks the toolchain, bootstraps `.env` from `.env.example` on first
+run, and starts the service:
 
 ```bash
-./startdev                                   # run with .env from the project root
-./startdev --keepalive.run-on-startup=false  # extra args go to the application
-./startdev --keepalive.cron=-                # ...such as disabling the schedule
+./startdev                                  # run with .env from the project root
+./startdev --help                           # extra args go to the application
 ```
 
-Or plainly, without Docker:
+Or plainly:
 
 ```bash
-./mvnw package
-java -jar target/supabase-keepalive-1.0.0.jar
+go build -o supabase-keepalive .
+./supabase-keepalive
 ```
 
-`.env` is read from the working directory. Set `DOTENV_PATH=/path/to/file` (environment variable
-or `-DDOTENV_PATH=`) to load it from somewhere else. Real environment variables always win over
-`.env`, so Docker Compose or a PaaS dashboard can override any value.
+`.env` is read from the working directory. Set `DOTENV_PATH=/path/to/file` to load it from
+elsewhere. Real environment variables always win over `.env`, so Docker Compose or a hosting
+platform can override any value.
 
-Requires a JDK 21 or newer to build.
+Requires Go 1.24+ to build.
 
 ## Configuration
 
@@ -45,17 +46,17 @@ Every setting is an environment variable; see `.env.example` for the annotated v
 |---|---|---|
 | `SUPABASE_URLS` | — | **Required.** Comma-separated connection strings, one per project |
 | `SUPABASE_TABLES` | — | **Required.** One table for all projects, or one per project in URL order |
-| `KEEPALIVE_CRON` | `0 0 3 * * *` | Spring 6-field cron. `-` disables the schedule |
+| `KEEPALIVE_CRON` | `0 0 3 * * *` | 6-field cron (second minute hour day month weekday). `-` disables the schedule |
 | `KEEPALIVE_TIMEZONE` | `UTC` | Zone the cron is evaluated in |
 | `KEEPALIVE_RUN_ON_STARTUP` | `true` | Ping every project once at startup |
 | `KEEPALIVE_RETRY_ATTEMPTS` | `3` | Attempts per project before it counts as failed |
 | `KEEPALIVE_RETRY_BACKOFF_MS` | `2000` | Linear backoff: attempt *n* waits *n* × this |
-| `KEEPALIVE_CONNECT_TIMEOUT_SECONDS` | `10` | JDBC connect/login timeout |
-| `KEEPALIVE_QUERY_TIMEOUT_SECONDS` | `10` | Statement query timeout |
+| `KEEPALIVE_CONNECT_TIMEOUT_SECONDS` | `10` | Connect timeout |
+| `KEEPALIVE_QUERY_TIMEOUT_SECONDS` | `10` | Query timeout |
 | `KEEPALIVE_API_TOKEN` | *(empty)* | When set, `/api/**` requires `Authorization: Bearer <token>` |
-| `SERVER_PORT` | `8088` | HTTP port |
 | `KEEPALIVE_LOG_LEVEL` | `INFO` | `DEBUG` also logs each connection attempt and the SQL being run |
-| `MANAGEMENT_HEALTH_SHOW_DETAILS` | `always` | Set to `never` to hide per-project detail from `/actuator/health` |
+| `SERVER_PORT` | `8088` | HTTP port |
+| `MANAGEMENT_HEALTH_SHOW_DETAILS` | `always` | Set to `never` to hide per-project detail from the health endpoint |
 
 ### Getting a connection string
 
@@ -73,8 +74,8 @@ The password is part of the URL, so percent-encode anything that would confuse a
 | `#` | `%23` |
 | `,` | `%2C` |
 
-`sslmode=require` is added automatically when the URL does not already specify one. A
-`jdbc:postgresql://…?user=…&password=…` URL is also accepted.
+`sslmode=require` is added automatically when the URL does not already specify one. The
+`jdbc:postgresql://…?user=…&password=…` form is also accepted.
 
 ### Tables
 
@@ -97,10 +98,12 @@ The service connects as the database user in the URL, so row-level security does
 |---|---|
 | `GET /api/keepalive/status` | Per-project last result, the schedule, and the next run time |
 | `POST /api/keepalive/run` | Run now, synchronously. `409` if a run is already in flight |
-| `GET /actuator/health` | `DOWN` when any project's last query failed |
+| `GET /actuator/health` | `503` and `DOWN` when any project's last query failed |
 | `GET /actuator/health/liveness` | Is the service itself alive — use this for container health checks |
 
-`/actuator/**` is never behind `KEEPALIVE_API_TOKEN`, so platform probes keep working.
+`/actuator/**` is never behind `KEEPALIVE_API_TOKEN`, so platform probes keep working. The paths
+are inherited from the Spring Boot version this replaced, so existing health checks keep working;
+the health body is `{"status", "details"}` rather than Spring's `components` shape.
 
 ```console
 $ curl -s localhost:8088/api/keepalive/status | jq '.projects[0]'
@@ -110,35 +113,34 @@ $ curl -s localhost:8088/api/keepalive/status | jq '.projects[0]'
   "host": "aws-0-us-east-1.pooler.supabase.com",
   "port": 5432,
   "database": "postgres",
-  "table": "public.keepalive_ping",
+  "table": "public.allowed_emails",
   "success": true,
   "attempts": 1,
-  "durationMs": 267,
+  "durationMs": 716,
   "rowsSeen": 1,
   "error": null,
-  "checkedAt": "2026-09-03T16:30:19.409332070Z"
+  "checkedAt": "2026-09-03T18:14:22.758145652Z"
 }
 ```
 
 ### Seeing what it does
 
-At the default `INFO` level each project reports one line per run:
+At `INFO` each project reports one line per run:
 
 ```
-Keep-alive OK: postgres.abcdefgh@aws-0-us-east-1.pooler.supabase.com/postgres table public.allowed_emails (1 row(s), 716 ms, attempt 1/3)
-Keep-alive run (startup) finished: 2/2 project(s) OK in 812 ms
+level=INFO msg="Keep-alive OK" project=postgres.abcdefgh@aws-0-us-east-1.pooler.supabase.com/postgres table=public.allowed_emails rows=1 durationMs=716 attempt=1 of=3
+level=INFO msg="Keep-alive run finished" trigger=startup ok=2 total=2 durationMs=812
 ```
 
-`1 row(s)` is the proof the query reached the database and came back with data; an empty table
-reports `0 row(s)`, which is still a success. For the connection itself, set `KEEPALIVE_LOG_LEVEL=DEBUG`
-(or pass `--logging.level.com.jian.supabasekeepalive=DEBUG`):
+`rows=1` is the proof the query reached the database and came back with data; an empty table
+reports `rows=0`, which is still a success. For the connection itself, set `KEEPALIVE_LOG_LEVEL=DEBUG`:
 
 ```
-Connecting to jdbc:postgresql://aws-0-us-east-1.pooler.supabase.com:5432/postgres?sslmode=require as postgres.abcdefgh (attempt 1/3)
-Connected to postgres.abcdefgh@aws-0-us-east-1.pooler.supabase.com/postgres; running: select * from "public"."allowed_emails" limit 1
+level=DEBUG msg="Connecting to project" dsn="postgresql://aws-0-us-east-1.pooler.supabase.com:5432/postgres?sslmode=require" user=postgres.abcdefgh attempt=1 of=3
+level=DEBUG msg=Connected project=postgres.abcdefgh@... sql="select * from \"public\".\"allowed_emails\" limit 1"
 ```
 
-The logged JDBC URL never contains the password — credentials are passed as connection properties.
+The logged DSN never contains the password — credentials are passed as connection parameters.
 
 ## How it works
 
@@ -146,27 +148,24 @@ The logged JDBC URL never contains the password — credentials are passed as co
   entry stops the service from booting, and the message names the entry number and which `.env`
   file was read — never the connection string itself, which contains the password.
 - **No connection pool.** A pool would hold idle connections against every project all day for the
-  sake of one query. Each ping opens a `DriverManager` connection and closes it.
-- **Parallel.** Projects are pinged concurrently on virtual threads.
-- **Credentials stay out of the logs.** The password is passed as a connection property, never in
-  the JDBC URL, and is scrubbed from any driver error message before it is logged or returned.
+  sake of one query. Each ping opens a connection and closes it.
+- **Parallel.** Projects are pinged concurrently, one goroutine each.
+- **Credentials stay out of the logs.** The password is passed as a connection parameter, never in
+  the logged DSN, and is scrubbed from any driver error before it is logged or returned.
 - **In-memory state.** `/api/keepalive/status` reflects the current process only; a restart clears
   the history. Nothing is persisted.
-- **Container health.** `/actuator/health` goes `DOWN` when a project fails, which is what you want
-  for alerting, so Compose health-checks `/actuator/health/liveness` instead — an unreachable
+- **Container health.** The health endpoint goes `DOWN` when a project fails, which is what you
+  want for alerting, so Compose health-checks `/actuator/health/liveness` instead — an unreachable
   Supabase project must not restart the service.
-
-Note that a completely blackholed host can take longer than
-`KEEPALIVE_CONNECT_TIMEOUT_SECONDS` to give up, because the PostgreSQL driver applies that timeout
-per socket attempt. Each project runs on its own thread, so a straggler only delays that project.
 
 ## Tests
 
 ```bash
-./mvnw test
+go test ./...
 ```
 
-The suite covers URL parsing (including percent-encoded passwords and credential leakage), table
-identifier validation and SQL-injection rejection, `.env` parsing and precedence, project/table
-pairing, the retry and redaction behaviour with a stubbed JDBC layer, the health indicator, the
-token filter, and the HTTP endpoints. No database or network is needed.
+68 cases covering connection-string parsing (percent-encoded passwords, credentials kept out of the
+DSN), table identifier validation and SQL-injection rejection, `.env` parsing and precedence,
+config defaults and bad values, project/table pairing, the retry and redaction behaviour against a
+stub connector, the concurrent-run guard, and every HTTP endpoint including the token filter and
+health status codes. No database or network is needed.

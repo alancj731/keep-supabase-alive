@@ -3,8 +3,7 @@
 # Starts supabase-keepalive for local development.
 #
 #   ./startdev                                  # run with .env from the project root
-#   ./startdev --keepalive.cron=-               # any extra args go to the application
-#   ./startdev --keepalive.run-on-startup=false
+#   ./startdev --help                           # any extra args go to the application
 #
 # Stop with Ctrl-C.
 
@@ -21,34 +20,9 @@ info() {
     printf '\033[36m==>\033[0m %s\n' "$1"
 }
 
-# --- JDK ------------------------------------------------------------------
-# This machine's default `java` is a JRE with no compiler, so a build needs a
-# real JDK. Prefer an explicit JAVA_HOME, else pick the newest JDK 21+ found.
-find_jdk() {
-    if [[ -n "${JAVA_HOME:-}" && -x "${JAVA_HOME}/bin/javac" ]]; then
-        echo "${JAVA_HOME}"
-        return 0
-    fi
-
-    local best="" best_version=0 javac home version
-    for javac in /usr/lib/jvm/*/bin/javac /opt/java/*/bin/javac "${HOME}"/.sdkman/candidates/java/*/bin/javac; do
-        [[ -x "${javac}" ]] || continue
-        home="${javac%/bin/javac}"
-        version="$("${javac}" -version 2>&1 | awk '{print $2}' | cut -d. -f1)"
-        [[ "${version}" =~ ^[0-9]+$ ]] || continue
-        if (( version >= 21 && version > best_version )); then
-            best="${home}"
-            best_version="${version}"
-        fi
-    done
-
-    [[ -n "${best}" ]] || return 1
-    echo "${best}"
-}
-
-JAVA_HOME="$(find_jdk)" || die "no JDK 21+ found. Install one (sudo dnf install temurin-21-jdk) or set JAVA_HOME."
-export JAVA_HOME
-info "JDK: ${JAVA_HOME} ($("${JAVA_HOME}/bin/javac" -version 2>&1))"
+# --- toolchain ------------------------------------------------------------
+command -v go >/dev/null 2>&1 || die "go is not installed. Install it (sudo dnf install golang) or add it to PATH."
+info "Go: $(go version)"
 
 # --- configuration --------------------------------------------------------
 if [[ ! -f .env ]]; then
@@ -62,10 +36,9 @@ if grep -qE '^SUPABASE_URLS=.*(abcdefghijkl|mnopqrstuvwx)' .env; then
     die ".env still contains the example connection strings. Replace them with your own."
 fi
 
-info "config: $(pwd)/.env ($(grep -cE '^SUPABASE_URLS=' .env) URLS line, $(awk -F= '/^SUPABASE_URLS=/{n=gsub(/,/,","); print n+1}' .env) project(s))"
+projects="$(awk -F= '/^SUPABASE_URLS=/{n=gsub(/,/,","); print n+1; exit}' .env)"
+info "config: $(pwd)/.env (${projects:-0} project(s))"
 
 # --- run ------------------------------------------------------------------
-# spring-boot:run forks a JVM that runs main(), which is what loads .env.
 info "starting (Ctrl-C to stop)"
-exec ./mvnw -q -ntp spring-boot:run \
-    ${1+-Dspring-boot.run.arguments="$*"}
+exec go run . "$@"
