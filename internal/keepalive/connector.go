@@ -37,6 +37,17 @@ func (c *PgxConnector) Ping(ctx context.Context, project Project) (int, error) {
 	config.Password = project.Password
 	config.RuntimeParams["application_name"] = "supabase-keepalive"
 
+	// Supabase's transaction pooler multiplexes clients over shared server
+	// connections, so a cached prepared statement outlives the client that
+	// created it and the next PREPARE of the same name fails with
+	// "prepared statement ... already exists (SQLSTATE 42P05)". The simple
+	// protocol sends the query as text and names nothing, so there is no
+	// server-side state to collide. That is safe here because the query has no
+	// parameters: the table name is validated and quoted at startup.
+	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	config.StatementCacheCapacity = 0
+	config.DescriptionCacheCapacity = 0
+
 	connectCtx, cancelConnect := context.WithTimeout(ctx, c.ConnectTimeout)
 	defer cancelConnect()
 

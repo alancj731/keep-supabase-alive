@@ -168,6 +168,81 @@ func TestRunAllRejectsConcurrentRun(t *testing.T) {
 	close(release)
 }
 
+// A hosted runtime can suspend an instance mid-run. The frozen run never
+// releases the guard, so without a takeover every later request would 409
+// forever.
+func TestStaleRunIsTakenOver(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{})
+	var once atomic.Bool
+	connector := &stubConnector{rows: 1, before: func() {
+		if once.CompareAndSwap(false, true) {
+			close(started)
+			<-release // only the first call blocks, standing in for a frozen run
+		}
+	}}
+	projects, err := BuildProjects([]string{testURL}, []string{"public.users"})
+	if err != nil {
+		t.Fatalf("BuildProjects: %v", err)
+	}
+	service := NewService(projects, connector,
+		Options{RetryAttempts: 1, RetryBackoff: 0, StaleRunAfter: time.Millisecond}, quietLogger())
+
+	go func() { _, _ = service.RunAll(context.Background(), "frozen") }()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first run never started")
+	}
+	time.Sleep(10 * time.Millisecond) // let it become stale
+
+	summary, err := service.RunAll(context.Background(), "takeover")
+	if err != nil {
+		t.Fatalf("the stale run should have been taken over, got %v", err)
+	}
+	if summary.Succeeded != 1 {
+		t.Errorf("summary = %+v", summary)
+	}
+
+	// The abandoned run finishing later must not clear the guard it lost.
+	if !service.IsRunning() {
+		close(release)
+		return
+	}
+	close(release)
+}
+
+func TestSupersededRunDoesNotClearTheNewGuard(t *testing.T) {
+	projects, err := BuildProjects([]string{testURL}, []string{"public.users"})
+	if err != nil {
+		t.Fatalf("BuildProjects: %v", err)
+	}
+	service := NewService(projects, &stubConnector{rows: 1},
+		Options{RetryAttempts: 1, StaleRunAfter: time.Millisecond}, quietLogger())
+
+	first, ok := service.beginRun()
+	if !ok {
+		t.Fatal("first run should have claimed the guard")
+	}
+	time.Sleep(5 * time.Millisecond)
+	second, ok := service.beginRun()
+	if !ok {
+		t.Fatal("the stale guard should have been taken over")
+	}
+	if second == first {
+		t.Fatal("the replacement run must get a new generation")
+	}
+
+	service.endRun(first) // the abandoned run finally finishes
+	if !service.IsRunning() {
+		t.Error("a superseded run cleared the guard belonging to its replacement")
+	}
+	service.endRun(second)
+	if service.IsRunning() {
+		t.Error("the owning run should have cleared the guard")
+	}
+}
+
 func TestNoResultsBeforeFirstRun(t *testing.T) {
 	service := testService(t, &stubConnector{rows: 1}, []string{testURL})
 

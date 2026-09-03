@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -47,6 +46,11 @@ type RunSummary struct {
 type Options struct {
 	RetryAttempts int
 	RetryBackoff  time.Duration
+	// StaleRunAfter is how long a run may hold the in-flight guard before a
+	// new request may take it over. Hosted runtimes can suspend an instance
+	// mid-run, and a run frozen that way never releases the guard, which would
+	// make every later request fail with 409 forever. Defaults to 5 minutes.
+	StaleRunAfter time.Duration
 }
 
 // Service runs the keep-alive query against every configured project and
@@ -57,17 +61,23 @@ type Service struct {
 	options   Options
 	logger    *slog.Logger
 
-	running atomic.Bool
-
 	mu          sync.RWMutex
 	lastResults map[string]PingResult
 	lastRun     *RunSummary
+	// active guards against concurrent runs; generation lets a superseded run
+	// know not to clear a guard it no longer owns.
+	active     bool
+	activeFrom time.Time
+	generation uint64
 }
 
 // NewService creates a Service over an already-validated project list.
 func NewService(projects []Project, connector Connector, options Options, logger *slog.Logger) *Service {
 	if options.RetryAttempts < 1 {
 		options.RetryAttempts = 1
+	}
+	if options.StaleRunAfter <= 0 {
+		options.StaleRunAfter = 5 * time.Minute
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -84,10 +94,11 @@ func NewService(projects []Project, connector Connector, options Options, logger
 // RunAll pings every project concurrently and records the outcome. It returns
 // ErrRunInProgress if another run has not finished yet.
 func (s *Service) RunAll(ctx context.Context, trigger string) (RunSummary, error) {
-	if !s.running.CompareAndSwap(false, true) {
+	generation, started := s.beginRun()
+	if !started {
 		return RunSummary{}, ErrRunInProgress
 	}
-	defer s.running.Store(false)
+	defer s.endRun(generation)
 
 	startedAt := time.Now().UTC()
 	results := make([]PingResult, len(s.projects))
@@ -226,8 +237,42 @@ func (s *Service) LastRun() *RunSummary {
 	return &summary
 }
 
+// beginRun claims the in-flight guard, taking it over from a run that has held
+// it for longer than StaleRunAfter and is therefore assumed abandoned.
+func (s *Service) beginRun() (uint64, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.active {
+		held := time.Since(s.activeFrom)
+		if held < s.options.StaleRunAfter {
+			return 0, false
+		}
+		s.logger.Warn("Taking over a keep-alive run that never finished",
+			"heldFor", held.String(), "staleAfter", s.options.StaleRunAfter.String())
+	}
+	s.generation++
+	s.active = true
+	s.activeFrom = time.Now()
+	return s.generation, true
+}
+
+// endRun releases the guard, but only if this run still owns it: a run that was
+// taken over as stale must not clear the guard held by its replacement.
+func (s *Service) endRun(generation uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.generation == generation {
+		s.active = false
+	}
+}
+
 // IsRunning reports whether a run is in flight.
-func (s *Service) IsRunning() bool { return s.running.Load() }
+func (s *Service) IsRunning() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.active
+}
 
 // ProjectCount is the number of configured projects.
 func (s *Service) ProjectCount() int { return len(s.projects) }

@@ -211,6 +211,14 @@ The logged DSN never contains the password — credentials are passed as connect
   the logged DSN, and is scrubbed from any driver error before it is logged or returned.
 - **In-memory state.** `/api/keepalive/status` reflects the current process only; a restart clears
   the history. Nothing is persisted.
+- **Simple protocol.** The client never issues `PREPARE`. A pooler in transaction mode shares one
+  server connection between clients, so a named prepared statement outlives the client that made
+  it and the next `PREPARE` of that name fails with `already exists (SQLSTATE 42P05)`. Sending the
+  query as text avoids that entirely, and costs nothing here: the query has no parameters.
+- **One run at a time**, with a takeover. A second run gets `409` while one is in flight, but a run
+  that has held the guard for more than five minutes is assumed abandoned and taken over — a
+  hosted runtime can suspend an instance mid-run, and that run would otherwise block every later
+  request forever.
 - **Container health.** The health endpoint goes `DOWN` when a project fails, which is what you
   want for alerting, so Compose health-checks `/actuator/health/liveness` instead — an unreachable
   Supabase project must not restart the service.
@@ -221,7 +229,7 @@ The logged DSN never contains the password — credentials are passed as connect
 go test ./...
 ```
 
-67 cases covering connection-string parsing (percent-encoded passwords, credentials kept out of
+69 cases covering connection-string parsing (percent-encoded passwords, credentials kept out of
 the DSN), table identifier validation and SQL-injection rejection, `.env` parsing and precedence,
 config defaults, bad values and `PORT`/`SERVER_PORT` precedence, project/table pairing, the retry
 and redaction behaviour against a stub connector, the concurrent-run guard, and every HTTP endpoint
