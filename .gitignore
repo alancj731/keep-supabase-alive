@@ -2,7 +2,8 @@
 .env
 
 # Build output
-/supabase-keepalive
+target/
+!.mvn/wrapper/maven-wrapper.properties
 
 # Editors / OS
 .idea/

@@ -1,26 +1,22 @@
 # ---- build ----------------------------------------------------------------
-FROM golang:1.26-alpine AS build
-WORKDIR /src
+FROM eclipse-temurin:21-jdk AS build
+WORKDIR /build
 
-# Warm the module cache before copying sources.
-COPY go.mod go.sum ./
-RUN go mod download
+# Warm the dependency cache before copying sources.
+COPY .mvn/ .mvn/
+COPY mvnw pom.xml ./
+RUN ./mvnw -B -ntp dependency:go-offline
 
-COPY cmd/ cmd/
-COPY internal/ internal/
-# Static binary so the runtime image needs no libc.
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/supabase-keepalive ./cmd/server
+COPY src/ src/
+RUN ./mvnw -B -ntp -DskipTests package && cp target/*.jar app.jar
 
 # ---- run ------------------------------------------------------------------
-FROM alpine:3.22
+FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 
-# tzdata so KEEPALIVE_TIMEZONE resolves; wget (busybox) backs the compose health check.
-RUN apk add --no-cache ca-certificates tzdata \
-    && addgroup -S keepalive && adduser -S -G keepalive keepalive
-
-COPY --from=build /out/supabase-keepalive /app/supabase-keepalive
+RUN addgroup -S keepalive && adduser -S -G keepalive keepalive
+COPY --from=build /build/app.jar app.jar
 USER keepalive
 
 EXPOSE 8088
-ENTRYPOINT ["/app/supabase-keepalive"]
+ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "/app/app.jar"]

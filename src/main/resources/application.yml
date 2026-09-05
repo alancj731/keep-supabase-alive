@@ -1,0 +1,47 @@
+spring:
+  application:
+    name: supabase-keepalive
+  threads:
+    virtual:
+      enabled: true
+
+server:
+  # Hosting platforms commonly inject PORT; it must win over a stale local SERVER_PORT.
+  port: ${PORT:${SERVER_PORT:8088}}
+
+keepalive:
+  # Comma-separated Supabase connection strings, one per project.
+  urls: ${SUPABASE_URLS:}
+  # One table for every project, or one per project in the same order as the URLs.
+  tables: ${SUPABASE_TABLES:}
+  # Spring 6-field cron. "-" disables scheduled runs (leaving only POST /api/keepalive/run).
+  cron: ${KEEPALIVE_CRON:0 0 3 * * *}
+  timezone: ${KEEPALIVE_TIMEZONE:UTC}
+  run-on-startup: ${KEEPALIVE_RUN_ON_STARTUP:true}
+  retry-attempts: ${KEEPALIVE_RETRY_ATTEMPTS:3}
+  retry-backoff-ms: ${KEEPALIVE_RETRY_BACKOFF_MS:2000}
+  connect-timeout-seconds: ${KEEPALIVE_CONNECT_TIMEOUT_SECONDS:10}
+  query-timeout-seconds: ${KEEPALIVE_QUERY_TIMEOUT_SECONDS:10}
+  # When set, /api/** requires "Authorization: Bearer <token>".
+  api-token: ${KEEPALIVE_API_TOKEN:}
+  # Token sent by an external cron service; accepted alongside KEEPALIVE_API_TOKEN.
+  cron-secret: ${CRON_SECRET:}
+  # A suspended process can strand the in-flight guard; let a later run take it over.
+  stale-run-after-seconds: ${KEEPALIVE_STALE_RUN_AFTER_SECONDS:300}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      # Details name the project host/user; set MANAGEMENT_HEALTH_SHOW_DETAILS=never when exposing
+      # this service on a public address.
+      show-details: ${MANAGEMENT_HEALTH_SHOW_DETAILS:always}
+      probes:
+        enabled: true
+
+logging:
+  level:
+    com.jian.supabasekeepalive: ${KEEPALIVE_LOG_LEVEL:INFO}

@@ -1,6 +1,5 @@
 .env
+target/
 .git/
 .idea/
-README.md
-DESIGN.md
-supabase-keepalive
+*.iml

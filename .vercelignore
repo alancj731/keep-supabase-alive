@@ -1,9 +1,0 @@
-# Never upload local secrets: the server reads ./.env if one is present.
-.env
-.env.*
-
-Dockerfile
-docker-compose.yml
-.dockerignore
-startdev
-DESIGN.md

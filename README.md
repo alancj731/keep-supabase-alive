@@ -6,8 +6,7 @@ connects to each one and runs `select * from <table> limit 1`. The result is thr
 point is the activity.
 
 Projects are configured entirely in `.env`, comma-separated, so adding one is a one-line change.
-
-Go, no framework: a ~32 MB container image and a single static binary.
+The implementation uses Java 21, Spring Boot 4, JDBC, Actuator, and virtual threads.
 
 ## Quick start
 
@@ -17,83 +16,27 @@ docker compose up -d --build
 curl localhost:8088/api/keepalive/status | jq
 ```
 
-For development, `./startdev` checks the toolchain, bootstraps `.env` from `.env.example` on first
-run, and starts the service:
+For development, `./startdev` picks a JDK 21+ (this machine's default `java` is a JRE),
+bootstraps `.env` from `.env.example` on first run, and starts the app:
 
 ```bash
-./startdev                                  # run with .env from the project root
-./startdev --help                           # extra args go to the application
+./startdev                                   # run with .env from the project root
+./startdev --keepalive.run-on-startup=false  # extra args go to the application
+./startdev --keepalive.cron=-                # ...such as disabling the schedule
 ```
 
-Or plainly:
+Or plainly, without Docker:
 
 ```bash
-go build -o supabase-keepalive ./cmd/supabase-keepalive
-./supabase-keepalive
+./mvnw package
+java -jar target/supabase-keepalive-1.0.0.jar
 ```
 
-`.env` is read from the working directory. Set `DOTENV_PATH=/path/to/file` to load it from
-elsewhere. Real environment variables always win over `.env`, so Docker Compose or a hosting
-platform can override any value.
+`.env` is read from the working directory. Set `DOTENV_PATH=/path/to/file` (environment variable
+or `-DDOTENV_PATH=`) to load it from somewhere else. Real environment variables always win over
+`.env`, so Docker Compose or a PaaS dashboard can override any value.
 
-Requires Go 1.23+ to build.
-
-### Deploying to Vercel
-
-Vercel's Go runtime builds a **standalone server**, not per-file functions: it looks for an
-entrypoint at `main.go`, `cmd/api/main.go` or `cmd/server/main.go`. This project puts it at
-`cmd/server/main.go`, so the whole service deploys — `/api/keepalive/status`, `/actuator/health`
-and all — and `SERVER_PORT` falls back to the `PORT` Vercel injects.
-
-What differs is the schedule: a hosted process is not guaranteed to stay alive between requests,
-so the in-process cron is disabled there and **Vercel Cron** calls `/api/keepalive/run` instead,
-on the schedule in `vercel.json`. That endpoint accepts `GET` as well as `POST` because hosted
-schedulers trigger with `GET`.
-
-```bash
-vercel deploy --prod          # or connect the GitHub repo in the dashboard
-```
-
-Import settings: Root Directory `./`, and leave Build/Output/Install commands empty.
-
-`vercel.json` sets `GOFLAGS=-buildvcs=false` for the build. Go stamps VCS metadata into the
-binary and aborts with `error obtaining VCS status: exit status 128` if it finds a `.git`
-directory it cannot read, which is easy to end up with in a build sandbox. For the same reason
-`.vercelignore` must not exclude `.git`: removing part of it leaves exactly the broken repository
-that triggers the error.
-
-Set these in Project → Settings → Environment Variables (there is no `.env` on Vercel):
-
-| Variable | Value |
-|---|---|
-| `SUPABASE_URLS` | your comma-separated list, unchanged |
-| `SUPABASE_TABLES` | unchanged |
-| `CRON_SECRET` | a random string — Vercel sends it as `Authorization: Bearer …`; `/api/**` rejects anything else |
-| `KEEPALIVE_CRON` | `-` — disable the in-process schedule; Vercel Cron drives it |
-| `KEEPALIVE_RUN_ON_STARTUP` | `false` — avoid a ping on every cold start |
-| `KEEPALIVE_RETRY_ATTEMPTS` | `2` — keeps a run inside the function time limit |
-| `KEEPALIVE_RETRY_BACKOFF_MS` | `500` |
-
-Do **not** set `SERVER_PORT` on a hosting platform. The platform injects `PORT`, picks the value
-itself and routes to it, so `PORT` takes precedence — a stale `SERVER_PORT` would only be honoured
-locally.
-
-Verify the deployment by triggering it the same way the scheduler does:
-
-```bash
-curl -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/keepalive/run
-```
-
-Other notes:
-
-- **The schedule lives in `vercel.json`**, in standard 5-field cron (`0 3 * * *`).
-- **Hobby plans currently limit cron to about one run per day** at an approximate time. That is
-  ample — Supabase's window is around seven days.
-- **Use the transaction pooler (port 6543)** rather than session mode: hosted runtimes open and
-  drop connections constantly. The client uses PostgreSQL's simple protocol so this works — a
-  pooler in transaction mode shares one server connection between clients, and cached prepared
-  statements collide there with `prepared statement ... already exists (SQLSTATE 42P05)`.
-- Status history resets whenever the instance is recycled; it is in memory, as everywhere else.
+Requires a JDK 21 or newer to build.
 
 ## Configuration
 
@@ -103,17 +46,19 @@ Every setting is an environment variable; see `.env.example` for the annotated v
 |---|---|---|
 | `SUPABASE_URLS` | — | **Required.** Comma-separated connection strings, one per project |
 | `SUPABASE_TABLES` | — | **Required.** One table for all projects, or one per project in URL order |
-| `KEEPALIVE_CRON` | `0 0 3 * * *` | 6-field cron (second minute hour day month weekday). `-` disables the schedule |
+| `KEEPALIVE_CRON` | `0 0 3 * * *` | Spring 6-field cron. `-` disables the schedule |
 | `KEEPALIVE_TIMEZONE` | `UTC` | Zone the cron is evaluated in |
 | `KEEPALIVE_RUN_ON_STARTUP` | `true` | Ping every project once at startup |
 | `KEEPALIVE_RETRY_ATTEMPTS` | `3` | Attempts per project before it counts as failed |
 | `KEEPALIVE_RETRY_BACKOFF_MS` | `2000` | Linear backoff: attempt *n* waits *n* × this |
-| `KEEPALIVE_CONNECT_TIMEOUT_SECONDS` | `10` | Connect timeout |
-| `KEEPALIVE_QUERY_TIMEOUT_SECONDS` | `10` | Query timeout |
+| `KEEPALIVE_CONNECT_TIMEOUT_SECONDS` | `10` | JDBC connect/login timeout |
+| `KEEPALIVE_QUERY_TIMEOUT_SECONDS` | `10` | Statement query timeout |
 | `KEEPALIVE_API_TOKEN` | *(empty)* | When set, `/api/**` requires `Authorization: Bearer <token>` |
+| `CRON_SECRET` | *(empty)* | Alternative bearer token for an external scheduler |
+| `KEEPALIVE_STALE_RUN_AFTER_SECONDS` | `300` | Allow takeover of an in-flight run stranded longer than this |
+| `SERVER_PORT` | `8088` | Local HTTP port; an injected `PORT` takes precedence |
 | `KEEPALIVE_LOG_LEVEL` | `INFO` | `DEBUG` also logs each connection attempt and the SQL being run |
-| `SERVER_PORT` | `PORT`, else `8088` | HTTP port. Platforms that inject `PORT` (Fly, Render, Railway) work without configuration |
-| `MANAGEMENT_HEALTH_SHOW_DETAILS` | `always` | Set to `never` to hide per-project detail from the health endpoint |
+| `MANAGEMENT_HEALTH_SHOW_DETAILS` | `always` | Set to `never` to hide per-project detail from `/actuator/health` |
 
 ### Getting a connection string
 
@@ -131,8 +76,8 @@ The password is part of the URL, so percent-encode anything that would confuse a
 | `#` | `%23` |
 | `,` | `%2C` |
 
-`sslmode=require` is added automatically when the URL does not already specify one. The
-`jdbc:postgresql://…?user=…&password=…` form is also accepted.
+`sslmode=require` is added automatically when the URL does not already specify one. A
+`jdbc:postgresql://…?user=…&password=…` URL is also accepted.
 
 ### Tables
 
@@ -154,13 +99,11 @@ The service connects as the database user in the URL, so row-level security does
 | Endpoint | Purpose |
 |---|---|
 | `GET /api/keepalive/status` | Per-project last result, the schedule, and the next run time |
-| `POST /api/keepalive/run` | Run now, synchronously. `409` if a run is already in flight |
-| `GET /actuator/health` | `503` and `DOWN` when any project's last query failed |
+| `GET` or `POST /api/keepalive/run` | Run now, synchronously. `GET` supports hosted schedulers; `409` if a run is already in flight |
+| `GET /actuator/health` | `DOWN` when any project's last query failed |
 | `GET /actuator/health/liveness` | Is the service itself alive — use this for container health checks |
 
-`/actuator/**` is never behind `KEEPALIVE_API_TOKEN`, so platform probes keep working. The paths
-are inherited from the Spring Boot version this replaced, so existing health checks keep working;
-the health body is `{"status", "details"}` rather than Spring's `components` shape.
+`/actuator/**` is never behind `KEEPALIVE_API_TOKEN`, so platform probes keep working.
 
 ```console
 $ curl -s localhost:8088/api/keepalive/status | jq '.projects[0]'
@@ -170,34 +113,35 @@ $ curl -s localhost:8088/api/keepalive/status | jq '.projects[0]'
   "host": "aws-0-us-east-1.pooler.supabase.com",
   "port": 5432,
   "database": "postgres",
-  "table": "public.allowed_emails",
+  "table": "public.keepalive_ping",
   "success": true,
   "attempts": 1,
-  "durationMs": 716,
+  "durationMs": 267,
   "rowsSeen": 1,
   "error": null,
-  "checkedAt": "2026-09-03T18:14:22.758145652Z"
+  "checkedAt": "2026-09-03T16:30:19.409332070Z"
 }
 ```
 
 ### Seeing what it does
 
-At `INFO` each project reports one line per run:
+At the default `INFO` level each project reports one line per run:
 
 ```
-level=INFO msg="Keep-alive OK" project=postgres.abcdefgh@aws-0-us-east-1.pooler.supabase.com/postgres table=public.allowed_emails rows=1 durationMs=716 attempt=1 of=3
-level=INFO msg="Keep-alive run finished" trigger=startup ok=2 total=2 durationMs=812
+Keep-alive OK: postgres.abcdefgh@aws-0-us-east-1.pooler.supabase.com/postgres table public.allowed_emails (1 row(s), 716 ms, attempt 1/3)
+Keep-alive run (startup) finished: 2/2 project(s) OK in 812 ms
 ```
 
-`rows=1` is the proof the query reached the database and came back with data; an empty table
-reports `rows=0`, which is still a success. For the connection itself, set `KEEPALIVE_LOG_LEVEL=DEBUG`:
+`1 row(s)` is the proof the query reached the database and came back with data; an empty table
+reports `0 row(s)`, which is still a success. For the connection itself, set `KEEPALIVE_LOG_LEVEL=DEBUG`
+(or pass `--logging.level.com.jian.supabasekeepalive=DEBUG`):
 
 ```
-level=DEBUG msg="Connecting to project" dsn="postgresql://aws-0-us-east-1.pooler.supabase.com:5432/postgres?sslmode=require" user=postgres.abcdefgh attempt=1 of=3
-level=DEBUG msg=Connected project=postgres.abcdefgh@... sql="select * from \"public\".\"allowed_emails\" limit 1"
+Connecting to jdbc:postgresql://aws-0-us-east-1.pooler.supabase.com:5432/postgres?sslmode=require as postgres.abcdefgh (attempt 1/3)
+Connected to postgres.abcdefgh@aws-0-us-east-1.pooler.supabase.com/postgres; running: select * from "public"."allowed_emails" limit 1
 ```
 
-The logged DSN never contains the password — credentials are passed as connection parameters.
+The logged JDBC URL never contains the password — credentials are passed as connection properties.
 
 ## How it works
 
@@ -205,33 +149,32 @@ The logged DSN never contains the password — credentials are passed as connect
   entry stops the service from booting, and the message names the entry number and which `.env`
   file was read — never the connection string itself, which contains the password.
 - **No connection pool.** A pool would hold idle connections against every project all day for the
-  sake of one query. Each ping opens a connection and closes it.
-- **Parallel.** Projects are pinged concurrently, one goroutine each.
-- **Credentials stay out of the logs.** The password is passed as a connection parameter, never in
-  the logged DSN, and is scrubbed from any driver error before it is logged or returned.
+  sake of one query. Each ping opens a `DriverManager` connection and closes it.
+- **Parallel.** Projects are pinged concurrently on virtual threads.
+- **Transaction-pooler safe.** PostgreSQL JDBC uses simple query mode, avoiding prepared-statement
+  state on pooler sessions shared between clients.
+- **Credentials stay out of the logs.** The password is passed as a connection property, never in
+  the JDBC URL, and is scrubbed from any driver error message before it is logged or returned.
 - **In-memory state.** `/api/keepalive/status` reflects the current process only; a restart clears
   the history. Nothing is persisted.
-- **Simple protocol.** The client never issues `PREPARE`. A pooler in transaction mode shares one
-  server connection between clients, so a named prepared statement outlives the client that made
-  it and the next `PREPARE` of that name fails with `already exists (SQLSTATE 42P05)`. Sending the
-  query as text avoids that entirely, and costs nothing here: the query has no parameters.
-- **One run at a time**, with a takeover. A second run gets `409` while one is in flight, but a run
-  that has held the guard for more than five minutes is assumed abandoned and taken over — a
-  hosted runtime can suspend an instance mid-run, and that run would otherwise block every later
-  request forever.
-- **Container health.** The health endpoint goes `DOWN` when a project fails, which is what you
-  want for alerting, so Compose health-checks `/actuator/health/liveness` instead — an unreachable
+- **One run at a time, with takeover.** Concurrent triggers receive `409`; a guard older than
+  `KEEPALIVE_STALE_RUN_AFTER_SECONDS` is treated as abandoned so a suspended request cannot wedge
+  the endpoint indefinitely.
+- **Container health.** `/actuator/health` goes `DOWN` when a project fails, which is what you want
+  for alerting, so Compose health-checks `/actuator/health/liveness` instead — an unreachable
   Supabase project must not restart the service.
+
+Note that a completely blackholed host can take longer than
+`KEEPALIVE_CONNECT_TIMEOUT_SECONDS` to give up, because the PostgreSQL driver applies that timeout
+per socket attempt. Each project runs on its own thread, so a straggler only delays that project.
 
 ## Tests
 
 ```bash
-go test ./...
+./mvnw test
 ```
 
-69 cases covering connection-string parsing (percent-encoded passwords, credentials kept out of
-the DSN), table identifier validation and SQL-injection rejection, `.env` parsing and precedence,
-config defaults, bad values and `PORT`/`SERVER_PORT` precedence, project/table pairing, the retry
-and redaction behaviour against a stub connector, the concurrent-run guard, and every HTTP endpoint
-including both accepted bearer tokens, the `GET`/`POST` trigger and the health status codes. No
-database or network is needed.
+The suite covers URL parsing (including percent-encoded passwords and credential leakage), table
+identifier validation and SQL-injection rejection, `.env` parsing and precedence, project/table
+pairing, the retry and redaction behaviour with a stubbed JDBC layer, the health indicator, the
+token filter, and the HTTP endpoints. No database or network is needed.
